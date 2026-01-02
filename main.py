@@ -30,7 +30,7 @@ def clamp(num: number, minvalue: number, maxvalue: number):
     return max(minvalue, min(num, maxvalue))
 
 
-MAX_SPEED = {0: 0.0, 1: 3.0, 2: 6.0, 3: 18.0, 4: 28.0}
+MAX_SPEED = {0: 0.0, 1: 3.0, 2: 6.0, 3: 18.0, 4: 32.0}
 GEAR_NAME = ("Neutral", "Gear #1", "Gear #2", "Gear #3", "Gear #4")
 
 ACCEL = 6.0
@@ -40,7 +40,7 @@ BRAKE_FORCE = 8.0
 UNIT_SCALING = 1
 CRUISE_RESPONSE = 5.0
 
-MAX_DISTANCE = 36000 * UNIT_SCALING / 1000
+MAX_DISTANCE = 360000 * UNIT_SCALING / 1000
 
 
 class Basic(Coloring):
