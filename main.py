@@ -1,6 +1,7 @@
 """ngeng"""
 
 import curses
+from math import e
 from time import monotonic
 from typing import TypeVar
 from lymia import ReturnType, Scene, const, on_key, run
@@ -31,9 +32,17 @@ def clamp(num: number, minvalue: number, maxvalue: number):
     return max(minvalue, min(num, maxvalue))
 
 
-MAX_SPEED = {0: 0.0, 1: 3.0, 2: 6.0, 3: 18.0, 4: 32.0}
+MAX_SPEED            = {0: 0.00, 1: 3.00, 2: 6.00, 3: 18.0, 4: 32.0}
+ACCEL_BONUS          = {0: 0.00, 1: 0.02, 2: 0.05, 3: 0.25, 4: 0.50}
+ACCEL_MULT_THRESHOLD = {0: 0.00, 1: 0.00, 2: 0.25, 3: 0.25, 4: 0.90}
+ACCEL_DROP_THRESHOLD = {0: 0.00, 1: 1.00, 2: 1.00, 3: 1.00, 4: 1.00}
+#MAX_SPEED            = {0: 0.0, 1: 3.0, 2: 6.0, 3: 18.0, 4: 32.0, 5: 64.0, 6: 128.0, 7: 256.0, 8: 512.0, 9: 1024, 10: 2048, 11: 99_999, 12: 9_999_999, 13: 99_999_999}
+#ACCEL_BONUS          = {0: 0, 1: 2.25, 2: 5, 3: 8, 4: 10, 5: 15, 6: 18, 7: 22, 8: 24, 9: 48, 10: 96, 11: 999, 12: 9_999, 13: 9_999_999}
+#ACCEL_MULT_THRESHOLD = {0: 0.0, 1: 0.0, 2: 0.25, 3: 0.25, 4: 0.50, 5: 0.60, 6: 0.65, 7: 0.75, 8: 0.75, 9: 0.75, 10: 0.90, 11: 0.0, 12: 0.0, 13: 0.0}
+#ACCEL_DROP_THRESHOLD = {0: 0.0, 1: 0.0, 2: 1.00, 3: 1.00, 4: 1.00, 5: 1.00, 6: 1.00, 7: 1.00, 8: 1.00, 9: 1.00, 10: 1.00, 11: 1.0, 12: 1.2, 13: 2.0}
 GEAR_KEYS = tuple(MAX_SPEED.keys())
 GEAR_NAME = ("Neutral", "Gear #1", "Gear #2", "Gear #3", "Gear #4")
+#GEAR_NAME = ("Neutral", "Gear #1", "Gear #2", "Gear #3", "Gear #4", "Gear #5", "Gear #6", "Gear #7", "Gear #8", "Gear #9", "Gear #10", "Gear MAX", "Gear ULTRA", "Gear ProMAX")
 
 ACCEL = 6.0
 DRAG = 2.5
@@ -42,9 +51,45 @@ BRAKE_FORCE = 8.0
 UNIT_SCALING = 1
 DOWNSHIFT_BRAKE = 10.0
 CRUISE_RESPONSE = 5.0
+ACCEL_BONUS_MULT_THRESHOLD = 0.5
+DROP_THRESHOLD = 0.0
 
-MAX_DISTANCE = 360000 * UNIT_SCALING / 1000
+INCREMENTAL_CURVE_SHARPNESS = 30
+DECREMENTAL_CURVE_SHARPNESS = 30
 
+MAX_DISTANCE = 36_000 * UNIT_SCALING / 1000
+#_acl_mult = lambda speed, maxspd, dropmult: max((speed / maxspd), 0.1)
+
+def _acl_thmult(mult: float, acm: float):
+    return 1 / (1 + e**(-INCREMENTAL_CURVE_SHARPNESS * (mult - acm)))
+
+def _drp_thmult(mult: float, dcm: float):
+    return 1 / (1 + e**(DECREMENTAL_CURVE_SHARPNESS * (2 * (mult - dcm))))
+
+def _acl_mult(speed: number, maxspd: number, accel_mult: float, drop_mult: float):
+    if maxspd == 0 or speed > maxspd:
+        return 0
+    mult = speed / maxspd
+    accel_threshold = _acl_thmult(mult, accel_mult)
+    drop_threshold = _drp_thmult(mult, drop_mult)
+    return min(mult * accel_threshold * drop_threshold, 1)
+
+def acl_mult(speed: number,
+             maxspd: number,
+             raw: bool = False,
+             mult_threshold: float = ACCEL_BONUS_MULT_THRESHOLD,
+             drop_threshold: float = DROP_THRESHOLD) -> number:
+    return _acl_mult(speed, maxspd, mult_threshold, drop_threshold)
+
+def acceleration_bonus(speed: number, gear: int) -> number:
+    maxspd = MAX_SPEED[gear]
+    acl_bonus = ACCEL_BONUS[gear]
+    threshold = ACCEL_MULT_THRESHOLD.get(gear, ACCEL_BONUS_MULT_THRESHOLD)
+    drop = ACCEL_DROP_THRESHOLD.get(gear, DROP_THRESHOLD)
+    base_mult = acl_mult(speed, maxspd, mult_threshold=threshold, drop_threshold=drop)
+    if speed > maxspd:
+        return 0
+    return acl_bonus * base_mult
 
 class Basic(Coloring):
     """Basic coloring"""
@@ -113,7 +158,8 @@ class Root(Scene):
             self._forward_active = False
         if self.gear != 0:
             if self._forward_active:
-                self.speed += ACCEL * delta_time
+                accel_bonus = acceleration_bonus(self.speed, self.gear)
+                self.speed += (ACCEL + accel_bonus) * delta_time
             else:
                 self.speed -= DRAG * delta_time
         else:
@@ -154,10 +200,15 @@ class Root(Scene):
         elapsed_time = f"{h:02d}:{m:02d}:{s:02d}"
         cruise = "[CRUISE]" if self.cruise_active else "[      ]"
         brake = "[BRAKE]" if self.brake_active else "[     ]"
+        maxspd = f"{MAX_SPEED[self.gear] * UNIT_SCALING * 3.6:,.2f}km/h"
         control_gear = f"[Gear: {GEAR_NAME[self.gear]}]"
+        acl_thr = ACCEL_MULT_THRESHOLD[self.gear]
+        drop_thr = ACCEL_DROP_THRESHOLD[self.gear]
+        acl_mlt = acl_mult(self.speed, MAX_SPEED[self.gear], mult_threshold=acl_thr, drop_threshold=drop_thr)
+        max_speed_ctl = f"[Max SPD: {maxspd}] ({acl_mlt*100:.4f}%)"
         progress = (distance / MAX_DISTANCE) * 100
         progress_speed = (
-            f"{progress:.2f}% [{distance:.2f}km] | {speed:.2f}km/h @ {elapsed_time}"
+            f"{progress:.2f}% [{distance:,.2f}km] | {speed:,.2f}km/h @ {elapsed_time}"
         )
         try:
             self.progress.render(
@@ -171,8 +222,9 @@ class Root(Scene):
                 only_bar=True,
             )  # type: ignore
             ren.addstr(1, 0, f"{progress_speed:^{width}}")
-            ren.addstr(1, width - len(progress_speed) + 2, pointer, pstyle)
-            ren.addstr(2, 0, f"{control_gear} | [q/e]", ds_style)
+            plen = len(progress_speed)
+            ren.addstr(1, width // 2 + plen // 2 + 2, pointer, pstyle)
+            ren.addstr(2, 0, f"{control_gear} | [q/e] {max_speed_ctl}", ds_style)
             ren.addstr(3, 0, f"{cruise}        | [tab]")
             ren.addstr(4, 0, f"{brake}         | [s]")
         except curses.error as e:
@@ -180,14 +232,14 @@ class Root(Scene):
             raise e
         self.show_status()
 
-    @on_key("w")
+    @on_key("w", curses.KEY_UP)
     def forward(self) -> ReturnType:
         """Go forward"""
         self._forward_active = True
         self._last_forward_event = now()
         return ReturnType.OK
 
-    @on_key("s")
+    @on_key("s", curses.KEY_DOWN)
     def brake(self) -> ReturnType:
         """Brake"""
         self.brake_active = True
